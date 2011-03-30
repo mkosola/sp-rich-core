@@ -33,33 +33,35 @@
 # 02110-1301 USA
 
 SW_VERSION_FILE=/etc/meego-release
+COREDIR=/home/meego/core-dumps
 
 case "$1" in
   start|restart|force-reload)
 
 	# Do not execute the script if we don't have the core dumper installed
 	# (i.e. the package has been removed but not purged)
-
 	test -x /usr/sbin/rich-core-dumper || exit 0
 
-	! test -x /home/meego/core-dumps || test -x /home/meego/core-dumps || mkdir /home/meego/core-dumps
+	# Create directory for core dumps if, and only if, it doesn't exist.
+	test -x $COREDIR || mkdir -p $COREDIR
 
 	# setup new core_pattern
-	sysctl -w kernel.core_pattern='|/usr/sbin/rich-core-dumper --pid=%p --signal=%s --name=%e'
+	sysctl -q -w kernel.core_pattern='|/usr/sbin/rich-core-dumper --pid=%p --signal=%s --name=%e'
 	;;
 
   stop)
   	# restore the backup-ed core_pattern only if it contains "rich-core-dumper" 
   	# keyword as it might have already been changed by someone else
-	coredir=/home/meego/core-dumps
-	test -x $coredir || mkdir -p $coredir
+	test -x $COREDIR || mkdir -p $COREDIR
 
-	release=$(cat ${SW_VERSION_FILE})
-	echo "Enabling core dumps to $coredir/..."
+	# Get MeeGo SW version.
+	rel=$(grep "BUILD" $SW_VERSION_FILE)
+	release="${rel##BUILD: }"
+	echo "Enabling core dumps to $COREDIR/..."
 
 	grep -q "rich-core-dumper" /proc/sys/kernel/core_pattern
   	if [ $? -eq 0 ]; then
-		sysctl -w kernel.core_pattern=$coredir/%e-%s-%p-$release.core
+		sysctl -q -w kernel.core_pattern=$COREDIR/%e-%s-%p-$release.core
 	fi
   		
 	;;

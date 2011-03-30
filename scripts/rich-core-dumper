@@ -384,14 +384,17 @@ if [ -z "${core_sig}" ]; then
 fi
 
 # Make a unique HW ID from IMEI
-imei_suffix=$(sysinfoclient -g /certs/npc/esn/gsm 2>/dev/null)
-if [ -z ${imei_suffix} -o "${imei_suffix}" = "<error>" ]; then
-    /usr/sbin/sysinfod --static
-    imei_suffix=$(awk -F '=' '/^\/certs\/npc\/esn\/gsm=/{print $2}' /var/cache/sysinfod/values)
-    if [ -z ${imei_suffix} ]; then
+# TODO: Do we need to have a "unique" identifier for cores. Using IMEI would be a privacy risk? 
+# An option would be to use to last octets from WLAN MAC (like in Maemo/Fremantle). 
+# Using the defalut "xxxx" for now. 
+#imei_suffix=$(sysinfoclient -g /certs/npc/esn/gsm 2>/dev/null)
+#if [ -z ${imei_suffix} -o "${imei_suffix}" = "<error>" ]; then
+#    /usr/sbin/sysinfod --static
+#    imei_suffix=$(awk -F '=' '/^\/certs\/npc\/esn\/gsm=/{print $2}' /var/cache/sysinfod/values)
+#    if [ -z ${imei_suffix} ]; then
         imei_suffix="xxxx"
-    fi
-fi
+#    fi
+#fi
  
 # Make a naming distinction between oopslogs and rich-cores
 if [ -n "${IS_OOPSLOG}" ]; then
