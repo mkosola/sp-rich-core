@@ -88,10 +88,10 @@ bool ElfBinaryReader::initalize(const char *fileName)
         LOG_RETURN(LOG_ERR, false, "Can not read the elf program headers for '%s'.", elf_errmsg(-1));
 #endif
 
-    if (elf_getphdrnum(file, &programHeaderNumber) == 0)
+    if (elf_getphdrnum(file, &programHeaderNumber) == -1)
         LOG_RETURN(LOG_ERR, false, "getphdrnum() failed: %s", elf_errmsg(-1));
 
-    if(elf_getshdrstrndx(file, &sectionHeaderStringIndex) == 0)
+    if(elf_getshdrstrndx(file, &sectionHeaderStringIndex) == -1)
         LOG_RETURN(LOG_ERR, false, "elf_getshdrstrndx() failed: %s", elf_errmsg(-1));
 
     return true;
