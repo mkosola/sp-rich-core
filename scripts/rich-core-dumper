@@ -44,7 +44,7 @@ _obtain_configuration()
   INCLUDE_CORE=true
   REDUCE_CORE=true
   INCLUDE_SYSLOG=true
-  INCLUDE_PKGLIST=false
+  INCLUDE_PKGLIST=true
 
   DEFAULT_CORE_NAME="unknown"
 
@@ -214,7 +214,7 @@ _section_proc2csv()
 _section_packagelist()
 {
   _print_header packagelist
-  awk '/^Package:/{printf("%s ",$2)}/^Version:/{print $2}' /var/lib/dpkg/status | /bin/grep -v -e -l10n -e -dbg | sort
+  rpm -qa --queryformat '%{NAME} %{VERSION}\n'
 }
 
 _section_syslog()
