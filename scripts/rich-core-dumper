@@ -44,7 +44,7 @@ _obtain_configuration()
   INCLUDE_CORE=true
   REDUCE_CORE=true
   INCLUDE_SYSLOG=true
-  INCLUDE_PKGLIST=true
+  INCLUDE_PKGLIST=false
 
   DEFAULT_CORE_NAME="unknown"
 
@@ -75,6 +75,9 @@ _parse_arguments()
       ;;
       --name=*)
       core_name=${1#--name=}
+      ;;
+      --tc-uuid=*)
+      core_tc_uuid=${1#--tc-uuid=}
       ;;
     esac
     shift
@@ -213,7 +216,7 @@ _section_proc2csv()
 
 _section_packagelist()
 {
-  _print_header packagelist
+  _print_header packagelist 
   rpm -qa --queryformat '%{NAME} %{VERSION}\n'
 }
 
@@ -401,7 +404,11 @@ if [ -n "${IS_OOPSLOG}" ]; then
 	timestamp=$(date +%F-%S)
 	rcorefilename=${core_location}/oopslog-${imei_suffix}-${timestamp}
 else
-	rcorefilename=${core_location}/${core_name}-${imei_suffix}-${core_sig}-${core_pid}
+	if [ -n "${core_tc_uuid}" ]; then
+		rcorefilename=${core_location}/${core_name}-${imei_suffix}-${core_sig}-${core_pid}-${core_tc_uuid}
+	else
+		rcorefilename=${core_location}/${core_name}-${imei_suffix}-${core_sig}-${core_pid}
+	fi
 fi
 
 # Collect process specific information first, only then system
