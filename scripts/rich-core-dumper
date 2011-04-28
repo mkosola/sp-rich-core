@@ -42,7 +42,7 @@ _obtain_configuration()
   user_settings=/home/user/.config/crash-reporter-settings
 
   INCLUDE_CORE=true
-  REDUCE_CORE=true
+  REDUCE_CORE=false
   INCLUDE_SYSLOG=true
   INCLUDE_PKGLIST=false
 
