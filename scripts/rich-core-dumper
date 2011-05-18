@@ -406,6 +406,8 @@ if [ -n "${IS_OOPSLOG}" ]; then
 else
 	if [ -n "${core_tc_uuid}" ]; then
 		rcorefilename=${core_location}/${core_name}-${imei_suffix}-${core_sig}-${core_pid}-${core_tc_uuid}
+		crashid=`echo $rcorefilename | md5sum | cut -d ' ' -f 1`
+		rcorefilename=$rcorefilename-$crashid
 	else
 		rcorefilename=${core_location}/${core_name}-${imei_suffix}-${core_sig}-${core_pid}
 	fi
