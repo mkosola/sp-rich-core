@@ -8,6 +8,8 @@ License: GPL-2
 Source0: %{_name}-%{version}.tar.gz  
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 BuildRequires: elfutils-libelf-devel
+Requires: sed
+Requires: coreutils
 Requires: lzop
 Requires: sp-endurance
 Requires: core-reducer
@@ -20,6 +22,7 @@ Tool that creates rich core dumps, which include information about system state 
 %defattr(-,root,root,-)
 %config %{_sysconfdir}/init.d/rich-core-*
 /usr/sbin/rich-core-dumper
+/usr/sbin/rich-core-find-uuid
 
 %package postproc
 Summary: Rich core postprocessing
