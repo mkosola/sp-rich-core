@@ -39,7 +39,7 @@
 // predefined heap address, will be used if an application does not have heap
 #define PREDEFINED_HEAP_ADDRESS 4
 
-#ifdef ARM_REGS
+#ifdef __arm__
 /*!
   * \brief The offset pointer in to the registry buffer that holds the value of R13 (aka esp)
   * \sa gdb-7.0/gdb/arm-tdep.c
