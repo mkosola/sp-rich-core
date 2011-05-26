@@ -206,7 +206,7 @@ Phdr *ElfBinaryReader::getSegmentByType(Elf_Word type)
 {
 	size_t n;
 
-	if (!elf_getphnum(file, &n))
+	if (elf_getphdrnum(file, &n) == -1)
 		return NULL;
 
 	Phdr *phdr = NULL;

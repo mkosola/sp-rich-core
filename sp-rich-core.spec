@@ -8,12 +8,12 @@ License: GPL-2
 Source0: %{_name}-%{version}.tar.gz  
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 BuildRequires: elfutils-libelf-devel
+BuildArch: noarch
 Requires: sed
 Requires: coreutils
 Requires: lzop
 Requires: sp-endurance
 Requires: core-reducer
-Requires: libXres
 
 %description
 Tool that creates rich core dumps, which include information about system state and core in a single compressed file. Requires a kernel that supports piping core dumps. 
