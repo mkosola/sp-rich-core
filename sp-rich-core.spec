@@ -8,7 +8,6 @@ License: GPL-2
 Source0: %{_name}-%{version}.tar.gz  
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 BuildRequires: elfutils-libelf-devel
-BuildArch: noarch
 Requires: sed
 Requires: coreutils
 Requires: lzop
