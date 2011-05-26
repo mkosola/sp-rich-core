@@ -1,6 +1,6 @@
 %define _name sp-rich-core
 Name: %{_name}
-Version: 1.65.1
+Version: 1.66.0
 Release: 1
 Summary: Create rich core dumps
 Group: Development/Tools
@@ -27,7 +27,7 @@ Tool that creates rich core dumps, which include information about system state 
 %package postproc
 Summary: Rich core postprocessing
 Group: Development/Tools
-#Requires: lzop
+Requires: lzop
 
 %description postproc
 Tools to extract information from rich cores.
