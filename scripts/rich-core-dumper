@@ -46,6 +46,10 @@ _obtain_configuration()
   INCLUDE_SYSLOG=true
   INCLUDE_PKGLIST=false
 
+  # Generate unique device ID. If set to true, ID will be generated from IMEI code; 
+  # otherwise MAC address will be used.
+  MD5_FROM_IMEI=true	
+ 
   DEFAULT_CORE_NAME="unknown"
 
   if [ -e $system_settings/crash-reporter-privacy.conf ]; then
@@ -232,6 +236,17 @@ _section_syslog()
   fi
 }
 
+_section_device_id()
+{
+  if [ -f /var/cache/rich-core-dumper/imei ]; then	
+    _print_file_with_header /var/cache/rich-core-dumper/imei
+  fi
+
+  if [ -f /var/cache/rich-core-dumper/mac ]; then
+    _print_file_with_header /var/cache/rich-core-dumper/mac
+  fi
+
+}
 
 _section_rich_core_errors()
 {
@@ -386,30 +401,41 @@ if [ -z "${core_sig}" ]; then
   core_sig=0
 fi
 
-# Make a unique HW ID from IMEI
-# TODO: Do we need to have a "unique" identifier for cores. Using IMEI would be a privacy risk? 
-# An option would be to use to last octets from WLAN MAC (like in Maemo/Fremantle). 
-# Using the defalut "xxxx" for now. 
-#imei_suffix=$(sysinfoclient -g /certs/npc/esn/gsm 2>/dev/null)
-#if [ -z ${imei_suffix} -o "${imei_suffix}" = "<error>" ]; then
-#    /usr/sbin/sysinfod --static
-#    imei_suffix=$(awk -F '=' '/^\/certs\/npc\/esn\/gsm=/{print $2}' /var/cache/sysinfod/values)
-#    if [ -z ${imei_suffix} ]; then
-        imei_suffix="xxxx"
-#    fi
-#fi
- 
+# Make a unique Device ID (MD5 from either IMEI or MAC)
+id_suffix="xxxx"
+if [ x"$MD5_FROM_IMEI" = x"true" ]; then
+	device_id_file=/var/cache/rich-core-dumper/imei
+else
+	device_id_file=/var/cache/rich-core-dumper/mac
+fi
+
+if [ ! -f ${device_id_file} ]; then
+	if [ x"$MD5_FROM_IMEI" = x"true" ]; then
+		device_id=$(sysinfo-tool -g /certs/npc/esn/gsm | md5sum | cut -d ' ' -f 1)
+	else
+		device_id=$(sysinfo-tool -g /certs/npc/esn/wlan_id | md5sum | cut -d ' ' -f 1)
+	fi
+
+	if [ ! -z ${device_id} ]; then
+		echo ${device_id} > $device_id_file
+		id_suffix=${device_id: -4}
+	fi
+else
+	device_id=$(cat $DEVICE_ID_FILE)
+	id_suffix=${device_id: -4}
+fi
+
 # Make a naming distinction between oopslogs and rich-cores
 if [ -n "${IS_OOPSLOG}" ]; then
 	timestamp=$(date +%F-%S)
-	rcorefilename=${core_location}/oopslog-${imei_suffix}-${timestamp}
+	rcorefilename=${core_location}/oopslog-${id_suffix}-${timestamp}
 else
 	if [ -n "${core_tc_uuid}" ]; then
-		rcorefilename=${core_location}/${core_name}-${imei_suffix}-${core_sig}-${core_pid}-${core_tc_uuid}
+		rcorefilename=${core_location}/${core_name}-${id_suffix}-${core_sig}-${core_pid}-${core_tc_uuid}
 		crashid=`echo $rcorefilename | md5sum | cut -d ' ' -f 1`
 		rcorefilename=$rcorefilename-$crashid
 	else
-		rcorefilename=${core_location}/${core_name}-${imei_suffix}-${core_sig}-${core_pid}
+		rcorefilename=${core_location}/${core_name}-${id_suffix}-${core_sig}-${core_pid}
 	fi
 fi
 
@@ -426,6 +452,7 @@ fi
   _section_software_version
   _section_df
   _section_ifconfig
+  _section_device_id
   _section_extra_files
 
 if [ -z "${IS_OOPSLOG}" ]; then

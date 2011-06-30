@@ -34,6 +34,7 @@
 
 SW_VERSION_FILE=/etc/meego-release
 COREDIR=/home/meego/core-dumps
+CACHEDIR=/var/cache/rich-core-dumper
 
 case "$1" in
   start|restart|force-reload)
@@ -42,8 +43,9 @@ case "$1" in
 	# (i.e. the package has been removed but not purged)
 	test -x /usr/sbin/rich-core-dumper || exit 0
 
-	# Create directory for core dumps if, and only if, it doesn't exist.
+	# Create directory for core dumps and cached data if, and only if, they don't exist.
 	test -x $COREDIR || mkdir -p $COREDIR
+	test -x $CACHEDIR || mkdir -p $CACHEDIR
 
 	# setup new core_pattern
 	sysctl -q -w kernel.core_pattern='|/usr/sbin/rich-core-dumper --pid=%p --signal=%s --name=%e'

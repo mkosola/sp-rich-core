@@ -38,7 +38,7 @@ _parse_arguments()
   else
       COREPATH=$1
       UUID=$2
-      UUIDPATTERN=/home/meego/core-dumps/*$UUID*
+      UUIDPATTERN=/home/meego/core-dumps/*$UUID*.rcore.lzo
   fi
 }
 
