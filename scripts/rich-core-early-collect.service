@@ -1,0 +1,30 @@
+[Unit]
+Description=Collects system logs early after boot if error conditions are detected.
+Requires=local-fs.target
+After=init-done.service oneshot-root-late.service
+
+ConditionFileIsExecutable=/usr/sbin/rich-core-dumper
+ConditionPathIsDirectory=/var/cache/core-dumps
+ConditionPathExists=!/tmp/richcore-early-collect-mark
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Test whether last reboot was caused by a hardware event and if so, gather the
+# log files into a crash report.
+ExecStart=-/bin/sh -c ' \
+	STATUS=$(/bin/sed -n "s|.*pwr_on_status=pwr_on_by_HW_\([^ ]*\).*|HW\1|p" /proc/cmdline) && \
+	/usr/bin/test -n "$STATUS" && \
+	/usr/sbin/rich-core-dumper --name=$STATUS --signal=$RANDOM'
+
+ExecStart=/usr/libexec/rich-core-check-oneshot
+
+ExecStart=-/bin/sh -c ' \
+	grep "Shutdown:" /var/log/systemboot.log | tail -n1 | grep -qi "overheat" && \
+	/usr/sbin/rich-core-dumper --name=OverheatShutdown --signal=$RANDOM'
+
+ExecStart=/bin/touch /tmp/richcore-early-collect-mark
+
+[Install]
+WantedBy=graphical.target

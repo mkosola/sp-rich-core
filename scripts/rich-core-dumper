@@ -23,12 +23,17 @@
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
 # 02110-1301 USA
 
+set +o posix
+
 #
 # Constant variables
 #
 
 SW_VERSION_FILE=/etc/os-release
-CORE_SIZE_LIMIT=300000		# kB
+CORE_LOCATION=/var/cache/core-dumps
+CORE_SIZE_LIMIT=1000000		# kB
+CORE_REDUCE_THRESHOLD=10000	# kB
+WAKE_LOCK_TIMEOUT=120 # s
 
 #
 # Helper functions
@@ -47,6 +52,7 @@ _obtain_configuration()
   INCLUDE_PKGLIST=true
   INCLUDE_STACK_TRACE=false
   DOWNLOAD_DEBUGINFO=false
+  KEEP_UNSTRIPPED_CORE=false
 
   DEFAULT_CORE_NAME="unknown"
 
@@ -82,16 +88,24 @@ _parse_arguments()
     esac
     shift
   done
+
+  # Default values for unset arguments.
+  core_pid=${core_pid:-0}
+
+  if [ -z "${core_sig}" ]; then
+    if [ "${core_name}" == "Quickie" ]; then
+      # Coreless reports requested from Quick Feedback tool should have a random
+      # number in place of a signal identifier in its filename.
+      core_sig=$RANDOM
+    else
+      core_sig=0
+    fi
+  fi
 }
 
 _print_header()
 {
     printf '\n[---rich-core: %s---]\n' "$@"
-}
-
-_print_separator()
-{
-    printf '\n--- %s ---\n' "$@"
 }
 
 _print_file_with_header()
@@ -100,39 +114,6 @@ _print_file_with_header()
     _print_header $1
     cat $1
   fi
-}
-
-_print_syslog_files_with_header()
-{
-    _print_header $1
-    for xorglog in /var/log/Xorg.0.log.*.gz; do
-        if [ -f "$xorglog" ]; then
-            _print_separator $xorglog
-            zcat $xorglog
-        fi
-    done
-    if [ -f /var/log/Xorg.0.log.old ]; then
-	_print_separator /var/log/Xorg.0.log.old
-	cat /var/log/Xorg.0.log.old
-    fi
-    if [ -f /var/log/Xorg.0.log ]; then
-	_print_separator /var/log/Xorg.0.log
-	cat /var/log/Xorg.0.log
-    fi
-    if [ -x /bin/journalctl ]; then
-        _print_separator journalctl
-        /bin/journalctl -a
-    fi
-    if [ -x /bin/dmesg ]; then
-	_print_separator dmesg
-	/bin/dmesg
-    fi
-    for file in "$@"; do
-	if [ -f $file ]; then
-	    _print_separator $file
-	    cat $file
-	fi
-    done
 }
 
 _print_command_with_header()
@@ -152,9 +133,32 @@ _free_space()
   df -Pk $1 | awk 'NR == 2 { print $4 }'
 }
 
+_check_core_location()
+{
+  # Check if location exists and has enough space to write a rich core.
+  if [ -d "$CORE_LOCATION" ]; then
+    freespace=`_free_space "$CORE_LOCATION"`
+    [ -n "$freespace" -a "$freespace" -ge 500000 ]
+    return
+  fi
+
+  return 1
+}
+
 #
 # Information collection functions
 #
+
+_section_kernel_parameters()
+{
+  _print_header kernel_parameters
+  cat /proc/cmdline
+}
+
+_section_pstree()
+{
+  _print_command_with_header /usr/bin/pstree -Uup
+}
 
 _section_date()
 {
@@ -178,15 +182,6 @@ _section_software_version()
   sed -n 's/PRETTY_NAME=\"\(.*\)\"/\1/p' "${SW_VERSION_FILE}"
 }
 
-_section_component_version()
-{
-  _print_header /proc/component_version
-  if [ ! -e /var/cache/sysinfod/values ]; then
-      /usr/sbin/sysinfod --static >/dev/null 2>&1
-  fi
-  sysinfoclient -g /component/product -g /component/hw-build -g /component/nolo -g /component/boot-mode 2>/dev/null | awk -F ' ' '{gsub(/\/.*\//,"",$1); printf("%-11s %s\n",$1,$3)}'
-}
-
 _section_ifconfig()
 {
   _print_command_with_header /sbin/ifconfig -a
@@ -194,7 +189,7 @@ _section_ifconfig()
 
 _section_df()
 {
-  _print_command_with_header /bin/df
+  _print_command_with_header /bin/df -x fuse.statefs
 }
 
 _section_ls_proc()
@@ -228,41 +223,93 @@ _section_proc2csv()
   _print_command_with_header /usr/bin/proc2csv
 }
 
+_section_ps()
+{
+  _print_command_with_header /bin/ps aux
+}
+
 _section_testcase_uuid()
 {
   _print_header testcase_uuid
   echo ${core_tc_uuid}
 }
 
+_section_user_message()
+{
+  # User feedback message created by quick-feedback application.
+  # Doesn't have to be present.
+  local quickie_file="${CORE_LOCATION}/quickie-${core_pid}"
+
+  if [ -f "${quickie_file}" ]; then
+    _print_header user_message
+    cat "${quickie_file}"
+    rm -f "${quickie_file}"
+  fi
+}
+
+_pkcon_query_installed()
+{
+  _run_with_timeout 30 pkcon --plain --noninteractive --filter=installed $@ \
+    | awk '/^Installed / {print $2}'
+}
+
 _section_packagelist()
 {
   _print_header packagelist
-  rpm -qa
+  _pkcon_query_installed get-packages
 }
 
 _section_repositories()
 {
   _print_header repositories
   ssu lr
-  pkcon -p repo-list | grep '^ '
 }
 
-_section_syslog()
+_dump_logs()
 {
-# as syslog has existed in two different places, try the old one first
-# to support older releases
+  for xorglog in /var/log/Xorg.0.log.*.gz; do
+    if [ -f "$xorglog" ]; then
+      _print_header $xorglog
+      zcat $xorglog
+    fi
+  done
 
-  if [ -e /var/ftd-log/syslog ]; then
-    _print_syslog_files_with_header /var/ftd-log/syslog
-  else
-    _print_syslog_files_with_header /var/log/syslog /var/log/syslog.old
+  _print_file_with_header /var/log/Xorg.0.log
+  _print_file_with_header /var/log/Xorg.0.log.old
+
+  _print_command_with_header /bin/journalctl -b
+  _print_command_with_header /bin/dmesg
+  _print_command_with_header /system/bin/logcat -d -b main -b radio
+
+  _print_file_with_header /var/log/syslog
+  _print_file_with_header /var/log/syslog.old
+  _print_file_with_header /var/log/systemboot.log
+  _print_file_with_header /var/systemlog/pmlog/pmlog.log
+}
+
+_dump_proc_lastlog()
+{
+  if [ -d /proc/lastlog ]; then
+    for file in /proc/lastlog/*; do
+      _print_header proc-lastlog-$(basename $file)
+      cat $file
+    done
   fi
+}
+
+_section_failed_oneshot_scripts()
+{
+  _print_header failed_oneshot_scripts
+  cat "${CORE_LOCATION}/oneshots"
 }
 
 _section_rich_core_errors()
 {
-  if [ "${omit_core}" = "true" ]; then
+  if [ "${omit_core}" = "true" ] || [ "$RICH_CORE_ERRORS" != "" ]; then
     _print_header rich-core-errors
+  fi
+
+  if [ "${omit_core}" = "true" ]; then
     echo "Core dumping was omitted due to lack of free space on device or core size greater than ${CORE_SIZE_LIMIT} kB."
     echo "Free space on device = ${freespace} kB"
     echo "Approximate size of core = ${coresize_approx} kB"
@@ -270,6 +317,8 @@ _section_rich_core_errors()
     echo "VmExe  = ${vmexe} kB"
     echo "VmLib  = ${vmlib} kB"
   fi
+
+  echo -e "${RICH_CORE_ERRORS%\\n}"
 }
 
 _section_extra_files()
@@ -291,8 +340,8 @@ _section_ssu_status()
 
 _section_exe_package()
 {
-	_print_header exe-package
-	rpmquery -f ${core_exe}
+  _print_header exe-package
+  _pkcon_query_installed search file ${core_exe}
 }
 
 _get_vmsizes()
@@ -308,7 +357,12 @@ _check_and_install()
 {
   (which $1 >/dev/null) && return 0
 
+  # If a running rpm scriptlet is detected, we don't execute pkcon. Application
+  # crashing inside that script may cause a deadlock since packagekitd would be
+  # waiting until scriptlet finishes, which would be waiting for failed program
+  # to finish dumping core, which would be waiting for pkcon to finish.
   [ $has_suitable_network_connection = "true" ] && \
+    ! (ps ax | grep '[/]bin/sh /var/tmp/rpm-tmp.' >/dev/null) && \
     (pkcon --noninteractive install $1 >/dev/null)
 
   return $?
@@ -334,15 +388,47 @@ _invoke_gdb()
   return 0
 }
 
-_section_proc_maps()
+_collect_shlibs()
 {
   core_maps=/proc/$core_pid/maps
+  local maps=$(sed -n 's|^\([[:xdigit:]]\+\)-\([[:xdigit:]]\+\) r-xp [^/]*\(/.*\).*$|\1 \2 \3|p' $core_maps)
 
-  local shlibs=$(sed -n 's|^\([[:xdigit:]]\+\)-[[:xdigit:]]\+ r-xp [^/]*\(/[^\( (\)]*\).*$|\1 \2|p' $core_maps)
+  if [ -d "/proc/$core_pid/map_files" ]; then
+    has_map_files=true
+  fi
+
+  while read startaddr endaddr lib; do
+    lib_path=${lib% (deleted)}
+
+    if [ -n "$has_map_files" ]; then
+      idsource=$(echo $startaddr | sed 's|^0*||')-$(echo $endaddr | sed 's|^0*||')
+      idsource="/proc/$core_pid/map_files/$idsource"
+    else
+      if [ "$lib_path" != "$lib" ]; then
+        DELETED_LIBS="${DELETED_LIBS}$lib_path\n"
+        continue
+      fi
+      idsource=$lib_path
+    fi
+
+    SH_LIBS="${SH_LIBS}$startaddr $lib_path $idsource\n"
+  done < <(echo "$maps")
+
+  SH_LIBS="${SH_LIBS%\\n}"
+
+  if [ -n "$DELETED_LIBS" ]; then
+    _print_header deleted_libs
+    echo -e "${DELETED_LIBS%\\n}"
+  fi
+}
+
+_section_proc_maps()
+{
+  _collect_shlibs
 
   _print_header buildids
-  while read startaddr lib; do
-    build_id=$(readelf -n $lib \
+  while read startaddr lib idsource; do
+    build_id=$(readelf -n $idsource \
         | sed -n 's/[[:space:]]*Build ID: \([[:xdigit:]]\+\)$/\1/p');
     if [ -n "$build_id" ]; then
       echo $lib $build_id
@@ -355,10 +441,12 @@ _section_proc_maps()
       lib=$(echo "$lib" | sed 's/^\/system\/lib\///')
       LIBS_WITHOUT_BUILD_ID="${LIBS_WITHOUT_BUILD_ID}add-symbol-file /system/symbols/$lib 0x$offset\n"
     fi
-  done < <(echo "$shlibs")
+  done < <(echo -e "$SH_LIBS")
 
-  _print_header buildids_missing
-  echo -e "$LIBS_WITHOUT_BUILD_ID"
+  if [ -n "$LIBS_WITHOUT_BUILD_ID" ]; then
+    _print_header buildids_missing
+    echo -e "${LIBS_WITHOUT_BUILD_ID%\\n}"
+  fi
 }
 
 _download_debuginfo()
@@ -393,9 +481,60 @@ _capture_stacktrace()
   fi
 }
 
+_reduce_core()
+{
+  local original_core_size=$(du -b "$originalcorefilename" | awk '{ print $1 }')
+  if [ $original_core_size -lt $(($CORE_REDUCE_THRESHOLD * 1000)) ]; then
+    _log_msg "Core size ${original_core_size}B below threshold; not reducing."
+    cat $originalcorefilename;
+    return;
+  fi
+
+  core-reducer -i "$originalcorefilename" -o /dev/stdout -e $core_exe
+  retval=$?
+  if [ $retval != 0 ]; then
+    RICH_CORE_ERRORS="${RICH_CORE_ERRORS}core-reducer exited with value $retval, core file of size ${original_core_size}B is likely truncated\n"
+  fi
+}
+
+_log_msg()
+{
+  # We run logger on background so that the script doesn't get stuck if system
+  # journal is not accessible.
+  logger "$1" &
+}
+
+_run_with_timeout()
+{
+  local timeout=$1
+  local cmd=$2
+  shift 2
+
+  ($cmd $@) &
+  local pid=$!
+
+  (sleep $timeout && kill -KILL $pid) 2>/dev/null &
+  local watcher=$!
+
+  wait $pid
+  pkill -HUP -P $watcher
+
+  if wait $watcher; then
+    # $watcher process returns zero exit status if timeout did occur.
+    echo "$cmd terminated after $timeout seconds." 
+  fi
+}
+
 #
 # Main program
 #
+
+# Don't dump cores when OS is updating.
+if [ -e /tmp/os-update-running ]; then
+  exit
+fi
+
+echo "rich-core-dumper $(($WAKE_LOCK_TIMEOUT * 1000000000))" > /sys/power/wake_lock
 
 export PATH
 
@@ -403,47 +542,46 @@ _obtain_configuration
 
 _parse_arguments $*
 
-logger "rich-core: arguments: $*"
+_log_msg "rich-core: arguments: $*"
 
-# if dumping disabled in settings, don't bother going further
-if [ x"${coredumping}" = x"false" ]; then
+# Clean up any leftover temporary files last modified more than two days ago.
+find "$CORE_LOCATION" -maxdepth 1 -mtime +2 -name *.tmp -delete
+
+# If dumping is disabled in settings, don't bother going further. However, the
+# setting is overriden if this dump was invoked with PID 0, meaning only logs
+# are collected, or the process was killed by SIGQUIT, which means user
+# explicitly requested its termination from quick-feedback application.
+if [ x"${coredumping}" = x"false" -a ! \( $core_pid -eq 0 -o $core_sig -eq 3 \) ]; then
   cat > /dev/null
   exit
 fi
 
-network_type=$(su nemo -c 'cat /run/user/100000/state/namespaces/Internet/NetworkType')
+if ! _check_core_location; then
+  [ $core_pid -eq 0 ] || cat > /dev/null
+  _log_msg "rich-core: no core location or not enough free space - not dumping"
+  exit
+fi
+
+if [ "$core_name" != "statefs" ]; then
+  network_type=$(cat /run/state/namespaces/Internet/NetworkType)
+fi
+
 has_suitable_network_connection=false
 
-# When no connection or on USB network, statefs reports empty string so accept
-# it here as well as wifi.
-if [ x"$network_type" = x"wifi" ] || [ x"$network_type" = x"" ]; then
+# Don't download anything when on a network that charges for data.
+# Valid NetworkType values are from src/connman/provider_connman.cpp in
+# Nemo Mobile's statefs-providers.
+if [ x"$network_type" = x"WLAN" -o x"$network_type" = x"ethernet" ]; then
   has_suitable_network_connection=true
-fi
-
-# Check, if there's location with enough space to write a rich-core.
-if [ -d /var/cache/core-dumps ]; then
-    freespace=`_free_space /var/cache/core-dumps`
-    if [ -n "$freespace" -a "$freespace" -gt 500000 ]; then
-        # more than 500MB free, go ahead
-        core_location="/var/cache/core-dumps"
-    else
-	logger "rich-core: less than 500M free in core location"
-    fi
-fi
-
-if [ x"${core_location}" = x ]; then
-  cat > /dev/null
-  logger "rich-core: no core location - not dumping"
-  exit
 fi
 
 # When core reducing and/or stack trace inclusion is enabled, coredump is
 # written temporarily on disk. Therefore, space left must be checked.
-if [ -n "${core_pid}" -a "${REDUCE_CORE}" = "true" ] || [ "${INCLUDE_STACK_TRACE}" = "true" ]; then
+if [ "${core_pid}" != "0" -a \( "${REDUCE_CORE}" = "true" -o "${INCLUDE_STACK_TRACE}" = "true" \) ]; then
   _get_vmsizes ${core_pid}
 
   if [ -z "${vmsize}" -o -z "${vmlib}" -o -z "${vmexe}" ]; then
-    logger "rich-core: could not get virtual memory information of process - not dumping"
+    _log_msg "rich-core: could not get virtual memory information of process - not dumping"
     cat > /dev/null
     exit
   fi
@@ -454,23 +592,20 @@ if [ -n "${core_pid}" -a "${REDUCE_CORE}" = "true" ] || [ "${INCLUDE_STACK_TRACE
   if [ $((${freespace} - ${coresize_approx})) -lt 50000 ]; then
     # not enough free space for input core file + required extra 50M
     omit_core=true
-    logger "rich-core: dumping core might fill up disk - not dumping"
+    _log_msg "rich-core: dumping core might fill up disk - not dumping"
   elif [ ${coresize_approx} -gt ${CORE_SIZE_LIMIT} ]; then
     # approximated size of input core file is greater than the limit
     omit_core=true
-    logger "rich-core: approximate of core size is greater than ${CORE_SIZE_LIMIT} kB - not dumping"
+    _log_msg "rich-core: approximate of core size is greater than ${CORE_SIZE_LIMIT} kB - not dumping"
+  fi
+
+  if [ "${omit_core}" = "true" ]; then
+    cat > /dev/null
   fi
 fi
 
-# If invoked from command line, we won't have a valid pid, so a dummy
-# value is assigned instead
-
-if [ x"$NO_SECTION_HEADER" = x"true" ] && [ -z ${core_pid} ]; then
-   core_pid=0
-fi
-
 # figure out the executable
-core_exe=`readlink -f /proc/${core_pid}/exe`
+core_exe=`readlink -f /proc/${core_pid}/exe | sed 's| (deleted)$||'`
 core_exe_basename=${core_exe##*/}
 
 # if process is invoker, don't create a core
@@ -537,13 +672,6 @@ if [ $has_suitable_network_connection = "false" ]; then
     DOWNLOAD_DEBUGINFO=false
 fi
 
-# We will lack the value for the signal if we're invoked from the
-# script. Provide a dummy value in that case.
-
-if [ -z "${core_sig}" ]; then
-  core_sig=0
-fi
-
 # Get hwid
 hwid=$(ssu model -s)
 if [ -z "${hwid}" ]; then
@@ -553,16 +681,16 @@ fi
 # Make a naming distinction between oopslogs and rich-cores
 if [ -n "${IS_OOPSLOG}" ]; then
   timestamp=$(date +%F-%S)
-  rcorebasename=${core_location}/oopslog-${hwid}-${timestamp}
+  rcorebasename=${CORE_LOCATION}/oopslog-${hwid}-${timestamp}
 else
-  rcorebasename=${core_location}/${core_name}-${hwid}-${core_sig}-${core_pid}
+  rcorebasename=${CORE_LOCATION}/${core_name}-${hwid}-${core_sig}-${core_pid}
 fi
 
 rcorefilename=${rcorebasename}.rcore.lzo
 
 # Create marker file for testrunner-lite
-if [ -f "${core_location}/testrunner-lite-testcase" ]; then
-  core_tc_uuid=$(cat "${core_location}/testrunner-lite-testcase")
+if [ -f "${CORE_LOCATION}/testrunner-lite-testcase" ]; then
+  core_tc_uuid=$(cat "${CORE_LOCATION}/testrunner-lite-testcase")
   touch "${rcorefilename}.${core_tc_uuid}"
 fi
 
@@ -577,14 +705,15 @@ if [ -z "${IS_OOPSLOG}" ] && [ "${core_pid}" -gt 0 ]; then
   _section_proc_maps
   _section_proc_smaps
 fi
-  _section_date
-  _section_software_version
-  #_section_component_version
-  _section_df
-  _section_ifconfig
-  _section_extra_files
-  _section_ssu_status
-  _section_exe_package
+
+_section_ps
+_section_kernel_parameters
+_section_pstree
+_section_date
+_section_software_version
+_section_df
+_section_ifconfig
+_section_extra_files
 
 if [ -z "${IS_OOPSLOG}" ]; then
     _section_slabinfo
@@ -595,30 +724,31 @@ if [ -n "${core_tc_uuid}" ]; then
   _section_testcase_uuid
 fi
 
-if [ x"$INCLUDE_SYSLOG" = x"true" ]; then
-  _section_syslog
+_section_user_message
+
+if [ "${core_name}" == "HWreboot" ]; then
+  _dump_proc_lastlog
 fi
-if [ x"$INCLUDE_PKGLIST" = x"true" ]; then
-  _section_packagelist
-  _section_repositories
+if [ "${core_name}" = "OneshotFailure" ]; then
+  _section_failed_oneshot_scripts
 fi
 if [ x"$NO_SECTION_HEADER" = x"true" -a "${omit_core}" != "true" ]; then
 cat
 elif [ -n "${IS_OOPSLOG}" ]; then
   _print_header oopslog
   cat
-elif [ "${omit_core}" != "true" ]; then
+elif [ "${omit_core}" != "true" ] && [ "${core_pid}" -gt 0 ]; then
   # By default core is read from stdin.
   originalcorefilename=-
   if [ x"$REDUCE_CORE" = x"true" ] || [ x"$INCLUDE_STACK_TRACE" = x"true" ]; then
-    originalcorefilename=${rcorebasename}.core.in
+    originalcorefilename=${rcorebasename}.core.in.tmp
     cat > ${originalcorefilename}
   fi
 
   if [ x"$INCLUDE_CORE" = x"true" ]; then
     _print_header coredump
     if [ x"$REDUCE_CORE" = x"true" ]; then
-      core-reducer -i "${originalcorefilename}" -o /dev/stdout -e ${core_exe}
+      _reduce_core
     else
       cat "${originalcorefilename}"
     fi
@@ -629,9 +759,29 @@ elif [ "${omit_core}" != "true" ]; then
   fi
 
   if [ -f "${originalcorefilename}" ]; then
-    rm "${originalcorefilename}"
+    if [ x"$KEEP_UNSTRIPPED_CORE" = x"true" ]; then
+      mv "${originalcorefilename}" "${originalcorefilename%.tmp}"
+    else
+      rm "${originalcorefilename}"
+    fi
   fi
 fi
+
+_section_ssu_status
+
+if [ "${core_pid}" -gt 0 ]; then
+  _section_exe_package
+fi
+
+if [ x"$INCLUDE_SYSLOG" = x"true" ]; then
+  _dump_logs
+fi
+
+if [ x"$INCLUDE_PKGLIST" = x"true" ]; then
+  _section_packagelist
+  _section_repositories
+fi
+
 _section_rich_core_errors
 ) | lzop > ${rcorebasename}.tmp
 
@@ -644,3 +794,4 @@ fi
 counterfile=/var/lib/dsme/rich-cores/${core_name}
 echo $(($(cat $counterfile 2>/dev/null)+1)) > $counterfile
 
+echo "rich-core-dumper" > /sys/power/wake_unlock
